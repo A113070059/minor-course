@@ -5,7 +5,13 @@ import firebaseConfig from "./firebase-applet-config.json";
 
 const app = initializeApp(firebaseConfig);
 export const auth = getAuth(app);
-export const db = getFirestore(app);
+
+// Support both the manual default database and the AI Studio provisioned named database
+const config: any = firebaseConfig;
+export const db = config.firestoreDatabaseId 
+  ? getFirestore(app, config.firestoreDatabaseId) 
+  : getFirestore(app);
+
 export const googleProvider = new GoogleAuthProvider();
 
 export enum OperationType {

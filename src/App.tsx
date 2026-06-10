@@ -8,7 +8,7 @@ import { UserProfile, Course, Department, CourseComment, isCourseMatchUserClass,
 import { DEPARTMENTS, COURSES, INITIAL_COMMENTS, INITIAL_USER } from "./data";
 import PhoneShell from "./components/PhoneShell";
 import { collection, onSnapshot, doc, setDoc } from "firebase/firestore";
-import { onAuthStateChanged } from "firebase/auth";
+import { onAuthStateChanged, signOut } from "firebase/auth";
 import { auth, db, handleFirestoreError, OperationType } from "./firebase";
 import CourseSelector from "./components/CourseSelector";
 import Timetable from "./components/Timetable";
@@ -156,34 +156,42 @@ export default function App() {
     const unsubscribe = onAuthStateChanged(auth, (user) => {
       if (user) {
         setUserProfile((prev) => {
-          if (!prev.isLoggedIn) {
-            let origName = user.displayName || "";
-            let cleanedName = origName.replace(/世新(大學)?/g, "").trim() || "SHU 學生";
-            const userEmail = user.email || "";
-            let extractedStudentId = "";
-            let majorId = prev.majorDeptId;
+          let origName = user.displayName || "";
+          let cleanedName = origName.replace(/世新(大學)?/g, "").trim() || "SHU 學生";
+          const userEmail = user.email || "";
+          let extractedStudentId = prev.studentId;
+          let majorId = prev.majorDeptId;
 
-            const isShuEmail = userEmail.toLowerCase().endsWith("@mail.shu.edu.tw");
-            if (isShuEmail) {
-              const prefix = userEmail.split("@")[0].toUpperCase();
-              extractedStudentId = prefix;
-              // Simple inline parser for school department ID
-              if (prefix.length >= 7) {
-                const deptCode = prefix.substring(4, 7);
-                const found = DEPARTMENTS.find((d) => d.code === deptCode);
-                if (found) {
-                  majorId = found.id;
-                }
+          const isShuEmail = userEmail.toLowerCase().endsWith("@mail.shu.edu.tw");
+          if (isShuEmail && !extractedStudentId) {
+            const prefix = userEmail.split("@")[0].toUpperCase();
+            extractedStudentId = prefix;
+            // Simple inline parser for school department ID
+            if (prefix.length >= 7) {
+              const deptCode = prefix.substring(4, 7);
+              const found = DEPARTMENTS.find((d) => d.code === deptCode);
+              if (found) {
+                majorId = found.id;
               }
             }
+          }
 
+          return {
+            ...prev,
+            name: prev.name && prev.name !== "SHU 學生" ? prev.name : cleanedName,
+            email: userEmail,
+            studentId: extractedStudentId || prev.studentId,
+            majorDeptId: majorId,
+            isLoggedIn: true,
+          };
+        });
+      } else {
+        // If not authenticated in Firebase, force local log out to prevent stale sessions
+        setUserProfile((prev) => {
+          if (prev.isLoggedIn) {
             return {
               ...prev,
-              name: cleanedName,
-              email: userEmail,
-              studentId: extractedStudentId || prev.studentId,
-              majorDeptId: majorId,
-              isLoggedIn: true,
+              isLoggedIn: false,
             };
           }
           return prev;
@@ -348,8 +356,13 @@ export default function App() {
     });
   };
 
-  // Log out action that sets isLoggedIn to false
-  const handleLogout = () => {
+  // Log out action that sets isLoggedIn to false and logs out of Firebase
+  const handleLogout = async () => {
+    try {
+      await signOut(auth);
+    } catch (e) {
+      console.warn("Firebase signOut failed:", e);
+    }
     setUserProfile((prev) => ({
       ...prev,
       isLoggedIn: false,
@@ -366,8 +379,16 @@ export default function App() {
     setActiveTab("courses");
   };
 
-  // Create & Append newly written comments by user
+  // Create & Append newly written comments by user and upload to Firestore
   const handleAddComment = async (newCommentDraft: Omit<CourseComment, "id" | "date">) => {
+    if (!auth.currentUser) {
+      setNotification({
+        message: "⚠️ 同步失敗：您目前未處於 Google 帳號授權登入狀態。請至「個人學籍」點擊登出按鈕並重新以 Google 學校郵件登入！",
+        type: "error"
+      });
+      return;
+    }
+
     const freshComment: CourseComment = {
       ...newCommentDraft,
       id: "comment_" + Date.now(),
@@ -382,8 +403,23 @@ export default function App() {
 
     try {
       await setDoc(doc(db, "comments", freshComment.id), freshComment);
-    } catch (error) {
-      handleFirestoreError(error, OperationType.WRITE, `comments/${freshComment.id}`);
+      setNotification({
+        message: "🎉 留言同步成功！所有使用者現在都能立即看見您的精彩分享。",
+        type: "success"
+      });
+    } catch (error: any) {
+      console.error("Firestore Comment Write Error: ", error);
+      // Revert the optimistic comment update on UI
+      setComments((prev) => prev.filter((c) => c.id !== freshComment.id));
+      
+      let errMsg = error.message || String(error);
+      if (errMsg.includes("permission-denied") || errMsg.includes("Permissions")) {
+        errMsg = "您的 Firebase 專案目前未開啟該 Firestore 資料表寫入權限，請檢查安全規則模式。";
+      }
+      setNotification({
+        message: `⚠️ 留言保存失敗！雲端同步遭拒。(${errMsg})`,
+        type: "error"
+      });
     }
   };
 
