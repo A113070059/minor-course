@@ -1,0 +1,6 @@
+{
+  "name": "大學輔系智慧選課規律系統",
+  "description": "專為大學生設計的輔系與雙主修智慧選課、排課與學分門檻平衡系統。支援即時課程衝堂判斷、可視化完成度學習地圖計、歷屆學長姐修課評價與學分計算機等完整 PRD 功能。",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
