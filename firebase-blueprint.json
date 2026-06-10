@@ -1,0 +1,26 @@
+{
+  "entities": {
+    "Comment": {
+      "title": "CourseComment",
+      "description": "A student review or comment for a course",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "The unique ID of the comment" },
+        "courseId": { "type": "string", "description": "The course code or ID" },
+        "reviewer": { "type": "string", "description": "Display name of reviewer" },
+        "ratingDifficulty": { "type": "integer", "description": "1 to 5 rating of difficulty" },
+        "ratingValue": { "type": "integer", "description": "1 to 5 rating of value/enrichment" },
+        "content": { "type": "string", "description": "Text content of the comment" },
+        "date": { "type": "string", "description": "Date of comment in YYYY-MM-DD" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Timestamp when the comment was created" }
+      },
+      "required": ["id", "courseId", "reviewer", "ratingDifficulty", "ratingValue", "content", "date"]
+    }
+  },
+  "firestore": {
+    "/comments/{commentId}": {
+      "schema": "Comment",
+      "description": "Collection of course reviews and comments"
+    }
+  }
+}

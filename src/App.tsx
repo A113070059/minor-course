@@ -7,6 +7,9 @@ import React, { useState, useEffect, useMemo } from "react";
 import { UserProfile, Course, Department, CourseComment, isCourseMatchUserClass, isCourseMatchMinorRequirements } from "./types";
 import { DEPARTMENTS, COURSES, INITIAL_COMMENTS, INITIAL_USER } from "./data";
 import PhoneShell from "./components/PhoneShell";
+import { collection, onSnapshot, doc, setDoc } from "firebase/firestore";
+import { onAuthStateChanged } from "firebase/auth";
+import { auth, db, handleFirestoreError, OperationType } from "./firebase";
 import CourseSelector from "./components/CourseSelector";
 import Timetable from "./components/Timetable";
 import CreditCalculator from "./components/CreditCalculator";
@@ -105,6 +108,90 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem("aux_course_comments", JSON.stringify(comments));
   }, [comments]);
+
+  // Read comments from Firestore in real-time
+  useEffect(() => {
+    const commentsColRef = collection(db, "comments");
+    const unsubscribe = onSnapshot(commentsColRef, (snapshot) => {
+      const dbComments: CourseComment[] = [];
+      snapshot.forEach((docSnap) => {
+        dbComments.push(docSnap.data() as CourseComment);
+      });
+
+      // Combine with INITIAL_COMMENTS, deduplicating by ID
+      const combined = [...dbComments];
+      INITIAL_COMMENTS.forEach((seed) => {
+        if (!combined.some((c) => c.id === seed.id)) {
+          combined.push(seed);
+        }
+      });
+
+      // Sort newer first
+      combined.sort((a, b) => {
+        const parseIdTime = (id: string) => {
+          if (id.startsWith("comment_")) {
+            const num = Number(id.replace("comment_", ""));
+            return isNaN(num) ? 0 : num;
+          }
+          return 0;
+        };
+        const tA = parseIdTime(a.id);
+        const tB = parseIdTime(b.id);
+        if (tA !== tB) {
+          return tB - tA;
+        }
+        return b.date.localeCompare(a.date) || b.id.localeCompare(a.id);
+      });
+
+      setComments(combined);
+    }, (error) => {
+      handleFirestoreError(error, OperationType.GET, "comments");
+    });
+
+    return () => unsubscribe();
+  }, []);
+
+  // Monitor Firebase Auth changes and sync local userProfile
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, (user) => {
+      if (user) {
+        setUserProfile((prev) => {
+          if (!prev.isLoggedIn) {
+            let origName = user.displayName || "";
+            let cleanedName = origName.replace(/世新(大學)?/g, "").trim() || "SHU 學生";
+            const userEmail = user.email || "";
+            let extractedStudentId = "";
+            let majorId = prev.majorDeptId;
+
+            const isShuEmail = userEmail.toLowerCase().endsWith("@mail.shu.edu.tw");
+            if (isShuEmail) {
+              const prefix = userEmail.split("@")[0].toUpperCase();
+              extractedStudentId = prefix;
+              // Simple inline parser for school department ID
+              if (prefix.length >= 7) {
+                const deptCode = prefix.substring(4, 7);
+                const found = DEPARTMENTS.find((d) => d.code === deptCode);
+                if (found) {
+                  majorId = found.id;
+                }
+              }
+            }
+
+            return {
+              ...prev,
+              name: cleanedName,
+              email: userEmail,
+              studentId: extractedStudentId || prev.studentId,
+              majorDeptId: majorId,
+              isLoggedIn: true,
+            };
+          }
+          return prev;
+        });
+      }
+    });
+    return () => unsubscribe();
+  }, []);
 
   // Alert dismiss timers
   useEffect(() => {
@@ -280,13 +367,24 @@ export default function App() {
   };
 
   // Create & Append newly written comments by user
-  const handleAddComment = (newCommentDraft: Omit<CourseComment, "id" | "date">) => {
+  const handleAddComment = async (newCommentDraft: Omit<CourseComment, "id" | "date">) => {
     const freshComment: CourseComment = {
       ...newCommentDraft,
       id: "comment_" + Date.now(),
       date: new Date().toISOString().split("T")[0],
     };
-    setComments((prev) => [freshComment, ...prev]);
+    
+    // Optimistically update local state
+    setComments((prev) => {
+      if (prev.some((c) => c.id === freshComment.id)) return prev;
+      return [freshComment, ...prev];
+    });
+
+    try {
+      await setDoc(doc(db, "comments", freshComment.id), freshComment);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.WRITE, `comments/${freshComment.id}`);
+    }
   };
 
   // Render Mobile Device Tab Content

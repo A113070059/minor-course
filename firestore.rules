@@ -1,0 +1,41 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Global Safety Net (Default-Deny Catch-All)
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Reusable general helper
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    // Input Validation for Comments
+    function isValidComment(data) {
+      return data.keys().hasAll(['id', 'courseId', 'reviewer', 'ratingDifficulty', 'ratingValue', 'content', 'date'])
+        && data.keys().size() == 7
+        && data.id is string && data.id.size() <= 100
+        && data.courseId is string && data.courseId.size() <= 50
+        && data.reviewer is string && data.reviewer.size() <= 120
+        && data.ratingDifficulty is int && data.ratingDifficulty >= 1 && data.ratingDifficulty <= 5
+        && data.ratingValue is int && data.ratingValue >= 1 && data.ratingValue <= 5
+        && data.content is string && data.content.size() <= 2000
+        && data.date is string && data.date.size() <= 40;
+    }
+
+    // Match comments collection
+    match /comments/{commentId} {
+      // Anyone can open the app and read peer reviews and course comments
+      allow list, get: if true;
+
+      // Only registered, logged-in students can publish a public comment
+      allow create: if isSignedIn() 
+        && commentId == request.resource.data.id
+        && isValidComment(request.resource.data);
+
+      // Comments are immutable once published (prevent editing other people's reviews)
+      allow update, delete: if false;
+    }
+  }
+}
